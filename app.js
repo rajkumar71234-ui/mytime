@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018f';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018g';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018f';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018g';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,7 +76,7 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
-const APP_VERSION = '20261018f';
+const APP_VERSION = '20261018g';
 // auto-update: if a newer version is published, refresh the cached files and reload once
 (async () => {
   try {
@@ -99,6 +99,7 @@ const I = {
   plus: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M12 8v8M8 12h8"/></svg>',
   chat: '<svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-12.4 7.4L3 20.5l1.6-5.2A8.5 8.5 0 1 1 21 11.5z"/></svg>',
   heart: '<svg viewBox="0 0 24 24"><path d="M12 20.5s-8-4.9-8-11A4.5 4.5 0 0 1 12 6.6 4.5 4.5 0 0 1 20 9.5c0 6.1-8 11-8 11z"/></svg>',
+  up: '<svg viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>',
   down: '<svg viewBox="0 0 24 24"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9A2 2 0 0 0 4.3 15H10zM17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/></svg>',
   comment: '<svg viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.6-4.9A8.5 8.5 0 1 1 20.5 12z"/></svg>',
   back: '<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -666,8 +667,9 @@ function postHtml(p) {
     </div>
     <div class="media" data-act="dbl" data-id="${p.id}">${mediaHtml(p)}</div>
     <div class="acts">
-      <button class="ib a-like" data-act="like" data-id="${p.id}">${I.heart}</button>
-      <button class="ib a-dis" data-act="dislike" data-id="${p.id}">${I.down}</button>
+      <button class="ib a-like" data-act="like" data-id="${p.id}" title="Heart">${I.heart}</button>
+      <button class="ib a-up" data-act="thumbup" data-id="${p.id}" title="Like">${I.up}</button>
+      <button class="ib a-dis" data-act="dislike" data-id="${p.id}" title="Dislike">${I.down}</button>
       <button class="ib" data-act="comments" data-id="${p.id}">${I.comment}</button>
     </div>
     <div class="counts"></div>
@@ -676,27 +678,53 @@ function postHtml(p) {
   </article>`;
 }
 function fillActions(el, p) {
-  const me = uid(), L = p.likes || [], D = p.dislikes || [], c = p.commentCount || 0;
+  const me = uid(), L = p.likes || [], U = p.ups || [], D = p.dislikes || [], c = p.commentCount || 0;
   el.querySelector('.a-like').classList.toggle('on-like', L.includes(me));
+  el.querySelector('.a-up').classList.toggle('on-up', U.includes(me));
   el.querySelector('.a-dis').classList.toggle('on-dis', D.includes(me));
   const parts = [];
-  if (L.length) parts.push(`${L.length} like${L.length > 1 ? 's' : ''}`);
+  if (L.length) parts.push(`❤️ ${L.length}`);
+  if (U.length) parts.push(`${U.length} like${U.length > 1 ? 's' : ''}`);
   if (D.length) parts.push(`${D.length} dislike${D.length > 1 ? 's' : ''}`);
   el.querySelector('.counts').textContent = parts.join(' · ');
   el.querySelector('.view-c').textContent = c ? `View ${c > 1 ? 'all ' + c + ' comments' : '1 comment'}` : 'Add a comment…';
 }
 
+// reactions: ❤️ heart (likes) is independent; 👍 like (ups) and 👎 dislike (dislikes) cancel each other
+const REACT_WORD = { likes: ['heart', 'Hearted'], ups: ['like', 'Liked'], dislikes: ['dislike', 'Disliked'] };
+function reactUpdate(obj, field, me) {
+  const has = (obj[field] || []).includes(me);
+  const upd = { [field]: has ? arrayRemove(me) : arrayUnion(me) };
+  if (!has && field === 'ups') upd.dislikes = arrayRemove(me);
+  if (!has && field === 'dislikes') upd.ups = arrayRemove(me);
+  return { has, upd };
+}
 async function react(id, field) {
   const p = S.postIndex.get(id); if (!p) return;
-  const me = uid(), other = field === 'likes' ? 'dislikes' : 'likes';
-  const has = (p[field] || []).includes(me);
+  const { has, upd } = reactUpdate(p, field, uid());
   try {
-    await updateDoc(doc(db, 'posts', id), has ? { [field]: arrayRemove(me) } : { [field]: arrayUnion(me), [other]: arrayRemove(me) });
-    if (!has) logAct(field === 'likes' ? 'like' : 'dislike', `${field === 'likes' ? 'Liked' : 'Disliked'} @${p.username}'s post`, { refId: id });
+    await updateDoc(doc(db, 'posts', id), upd);
+    if (!has) logAct(REACT_WORD[field][0], `${REACT_WORD[field][1]} @${p.username}'s post`, { refId: id });
   } catch (e) { errH(e); }
 }
 ACT.like = el => react(el.dataset.id, 'likes');
+ACT.thumbup = el => react(el.dataset.id, 'ups');
 ACT.dislike = el => react(el.dataset.id, 'dislikes');
+// comment reactions
+const commentIndex = new Map();
+ACT['c-react'] = async el => {
+  const { pid, cid, f } = el.dataset, c = commentIndex.get(pid + '/' + cid); if (!c) return;
+  const { has, upd } = reactUpdate(c, f, uid());
+  try {
+    await updateDoc(doc(db, 'posts', pid, 'comments', cid), upd);
+    if (!has) logAct(REACT_WORD[f][0], `${REACT_WORD[f][1]} @${c.username}'s comment: ${c.text}`, { refId: pid });
+  } catch (e) { errH(e); }
+};
+function commentReacts(pid, c) {
+  const me = uid();
+  const b = (f, icon, cls) => { const n = (c[f] || []).length; return `<button class="cr ${(c[f] || []).includes(me) ? cls : ''}" data-act="c-react" data-pid="${pid}" data-cid="${c.id}" data-f="${f}">${icon}${n ? `<span>${n}</span>` : ''}</button>`; };
+  return `<div class="crs">${b('likes', I.heart, 'on-like')}${b('ups', I.up, 'on-up')}${b('dislikes', I.down, 'on-dis')}</div>`;
+}
 const lastTap = {};
 ACT.dbl = (el, e) => {
   if (e.target.tagName === 'VIDEO') return;
@@ -733,12 +761,15 @@ function openComments(pid) {
   const list = $('#c-list', sh);
   sh.unsubs.push(onSnapshot(query(collection(db, 'posts', pid, 'comments'), orderBy('createdAt')), s => {
     const cs = s.docs.map(dataOf).filter(c => !c.deleted);
+    cs.forEach(c => commentIndex.set(pid + '/' + c.id, c));
+    const grew = cs.length > (list._n || 0); list._n = cs.length;
+    const keep = list.scrollTop;
     list.innerHTML = cs.length ? cs.map(c => `<div class="cm">
         <span data-act="profile" data-uid="${c.uid}">${avatar(c, 32)}</span>
-        <div class="txt"><b data-act="profile" data-uid="${c.uid}">${esc(c.username)}</b> ${esc(c.text)}<div class="muted">${timeAgo(c.createdAt)}</div></div>
+        <div class="txt"><b data-act="profile" data-uid="${c.uid}">${esc(c.username)}</b> ${esc(c.text)}<div class="muted">${timeAgo(c.createdAt)}</div>${commentReacts(pid, c)}</div>
         ${c.uid === uid() ? `<button class="ib" data-act="del-comment" data-pid="${pid}" data-cid="${c.id}" data-text="${esc(c.text)}">${I.close}</button>` : ''}
       </div>`).join('') : `<div class="empty"><b>No comments yet</b>Start the conversation.</div>`;
-    list.scrollTop = list.scrollHeight;
+    list.scrollTop = grew ? list.scrollHeight : keep;
   }, errH));
   const f = $('#c-form', sh);
   f.addEventListener('submit', async e => {

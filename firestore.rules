@@ -119,7 +119,7 @@ service cloud.firestore {
         && request.resource.data.deleted == false;
       allow update: if approved() && (
         (resource.data.uid == request.auth.uid && onlyKeys(['caption','deleted','deletedAt']))
-        || onlyKeys(['likes','dislikes','commentCount']));
+        || onlyKeys(['likes','ups','dislikes','commentCount']));
 
       match /comments/{cid} {
         allow read: if approved();
@@ -127,6 +127,8 @@ service cloud.firestore {
         allow update: if approved()
           && resource.data.uid == request.auth.uid
           && onlyKeys(['deleted','deletedAt']);
+        // anyone approved can react to a comment
+        allow update: if approved() && onlyKeys(['likes','ups','dislikes']);
       }
     }
 

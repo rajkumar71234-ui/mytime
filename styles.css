@@ -252,3 +252,10 @@ svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .media [data-media]:not([data-ready]){min-height:320px;width:100%}
 .sv-media [data-media]:not([data-ready]){width:60%;aspect-ratio:9/16;background:#222}
 @keyframes shim{to{background-position:-200% 0}}
+.acts .on-up svg{fill:var(--accent);stroke:var(--accent)}
+.crs{display:flex;gap:4px;margin-top:4px}
+.cr{background:none;border:0;padding:2px 6px 2px 0;display:flex;align-items:center;gap:3px;color:var(--muted);font-size:12px;cursor:pointer}
+.cr svg{width:16px;height:16px}
+.cr.on-like svg{fill:var(--red);stroke:var(--red)}
+.cr.on-up svg{fill:var(--accent);stroke:var(--accent)}
+.cr.on-dis svg{fill:#262626;stroke:#262626}
