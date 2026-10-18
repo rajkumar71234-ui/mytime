@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018h';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018i';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018h';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018i';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,7 +76,7 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
-const APP_VERSION = '20261018h';
+const APP_VERSION = '20261018i';
 // auto-update: if a newer version is published, refresh the cached files and reload once
 (async () => {
   try {
@@ -798,7 +798,21 @@ ACT['c-react'] = async el => {
 function commentReacts(pid, c) {
   const me = uid();
   const b = (f, icon, cls) => { const n = (c[f] || []).length; return `<button class="cr ${(c[f] || []).includes(me) ? cls : ''}" data-act="c-react" data-pid="${pid}" data-cid="${c.id}" data-f="${f}">${icon}${n ? `<span>${n}</span>` : ''}</button>`; };
-  return `<div class="crs">${b('likes', I.heart, 'on-like')}${b('ups', I.up, 'on-up')}${b('dislikes', I.down, 'on-dis')}</div>`;
+  return `<div class="crs">${b('likes', I.heart, 'on-like')}${b('ups', I.up, 'on-up')}${b('dislikes', I.down, 'on-dis')}<button class="cr cr-txt" data-act="c-reply" data-cid="${c.parentId || c.id}" data-user="${esc(c.username)}">Reply</button></div>`;
+}
+// reply to a comment: remembers the thread on the composer form
+ACT['c-reply'] = el => {
+  const sh = el.closest('.sheet'), f = sh.querySelector('#c-form');
+  f.dataset.parent = el.dataset.cid; f.dataset.replyTo = el.dataset.user;
+  let chip = sh.querySelector('.replying');
+  if (!chip) { chip = document.createElement('div'); chip.className = 'replying'; f.before(chip); }
+  chip.innerHTML = `Replying to <b>@${esc(el.dataset.user)}</b> <button class="ib" data-act="c-reply-cancel">${I.close}</button>`;
+  if (!f.t.value.startsWith('@' + el.dataset.user)) f.t.value = '@' + el.dataset.user + ' ';
+  f.t.focus();
+};
+ACT['c-reply-cancel'] = el => {
+  const sh = el.closest('.sheet'), f = sh.querySelector('#c-form');
+  delete f.dataset.parent; delete f.dataset.replyTo; sh.querySelector('.replying')?.remove(); f.t.value = '';
 }
 const lastTap = {};
 ACT.dbl = (el, e) => {
@@ -839,7 +853,10 @@ function openComments(pid) {
     cs.forEach(c => commentIndex.set(pid + '/' + c.id, c));
     const grew = cs.length > (list._n || 0); list._n = cs.length;
     const keep = list.scrollTop;
-    list.innerHTML = cs.length ? cs.map(c => `<div class="cm">
+    const ids = new Set(cs.map(c => c.id));
+    const ordered = [];
+    cs.filter(c => !c.parentId || !ids.has(c.parentId)).forEach(t => { ordered.push(t); cs.filter(r => r.parentId === t.id).forEach(r => ordered.push(r)); });
+    list.innerHTML = cs.length ? ordered.map(c => `<div class="cm${c.parentId && ids.has(c.parentId) ? ' reply' : ''}">
         <span data-act="profile" data-uid="${c.uid}">${avatar(c, 32)}</span>
         <div class="txt"><b data-act="profile" data-uid="${c.uid}">${esc(c.username)}</b> ${esc(c.text)}<div class="muted">${timeAgo(c.createdAt)}</div>${commentReacts(pid, c)}</div>
         ${c.uid === uid() ? `<button class="ib" data-act="del-comment" data-pid="${pid}" data-cid="${c.id}" data-text="${esc(c.text)}">${I.close}</button>` : ''}
@@ -850,10 +867,12 @@ function openComments(pid) {
   f.addEventListener('submit', async e => {
     e.preventDefault(); const text = f.t.value.trim(); if (!text) return; f.t.value = '';
     try {
-      await addDoc(collection(db, 'posts', pid, 'comments'), { uid: uid(), username: S.me.username, avatarUrl: S.me.avatarUrl || '', text, deleted: false, createdAt: serverTimestamp() });
+      const parent = f.dataset.parent, replyTo = f.dataset.replyTo;
+      delete f.dataset.parent; delete f.dataset.replyTo; sh.querySelector('.replying')?.remove();
+      await addDoc(collection(db, 'posts', pid, 'comments'), { uid: uid(), username: S.me.username, avatarUrl: S.me.avatarUrl || '', text, deleted: false, createdAt: serverTimestamp(), ...(parent ? { parentId: parent, replyTo } : {}) });
       await updateDoc(doc(db, 'posts', pid), { commentCount: increment(1) });
       const p = S.postIndex.get(pid);
-      logAct('comment', `Commented on @${p?.username || 'post'}: ${text}`, { refId: pid });
+      logAct('comment', parent ? `Replied to @${replyTo} on @${p?.username || 'post'}'s post: ${text}` : `Commented on @${p?.username || 'post'}: ${text}`, { refId: pid });
     } catch (ex) { errH(ex); }
   });
 }

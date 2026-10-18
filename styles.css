@@ -261,3 +261,8 @@ svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .cr.on-dis svg{fill:#262626;stroke:#262626}
 .nbar{margin:10px 12px 0;padding:11px 14px;border-radius:12px;background:#eef6ff;color:#0b4f8a;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between;cursor:pointer}
 .nbar b{white-space:nowrap}
+.cm.reply{padding-left:56px}
+.cm.reply .av{width:26px!important;height:26px!important}
+.cr-txt{font-weight:600}
+.replying{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;font-size:13px;color:var(--muted);background:var(--soft);border-top:1px solid var(--line)}
+.replying .ib svg{width:16px;height:16px}
