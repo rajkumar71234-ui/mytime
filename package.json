@@ -1,0 +1,10 @@
+{
+  "name": "mytime-notify",
+  "private": true,
+  "type": "module",
+  "description": "Background push notifications for mytime (run by GitHub Actions)",
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "web-push": "^3.6.7"
+  }
+}

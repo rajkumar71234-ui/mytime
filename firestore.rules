@@ -160,6 +160,14 @@ service cloud.firestore {
       }
     }
 
+    // ---------- notifications ----------
+    match /config/vapidPublic {
+      allow get: if signedIn();
+    }
+    match /pushSubs/{uid}/subs/{sid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
     // ---------- activity log (write-only for users, admin reads) ----------
     match /logs/{lid} {
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;

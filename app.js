@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018g';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018h';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018g';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018h';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,7 +76,7 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
-const APP_VERSION = '20261018g';
+const APP_VERSION = '20261018h';
 // auto-update: if a newer version is published, refresh the cached files and reload once
 (async () => {
   try {
@@ -557,6 +557,76 @@ async function onMe() {
   })[st]();
 }
 
+// ================= NOTIFICATIONS =================
+// App open: live listeners call alertUser() → phone notification tone + vibration + banner.
+// App closed: a GitHub Action (every ~5 min) sends Web Push to the subscriptions saved below.
+let swReg = null;
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js?v=1').then(r => { swReg = r; }).catch(e => console.warn('sw', e));
+const IS_IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_STANDALONE = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+const notifOn = () => pushSupported() && Notification.permission === 'granted';
+function b64uToU8(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4); return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
+async function subscribePush() {
+  const pub = (await getDoc(doc(db, 'config', 'vapidPublic'))).data()?.key;
+  if (!pub) throw new Error('Notifications are not set up yet.');
+  const reg = swReg || await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(pub) });
+  const j = sub.toJSON();
+  const h = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(j.endpoint)))].slice(0, 12).map(x => x.toString(16).padStart(2, '0')).join('');
+  await setDoc(doc(db, 'pushSubs', uid(), 'subs', h), { sub: j, ua: navigator.userAgent.slice(0, 160), updatedAt: serverTimestamp() });
+}
+function notifBanner() {
+  if (notifOn()) return '';
+  if (IS_IOS && !IS_STANDALONE) return `<div class="nbar">🔔 To get notifications on iPhone: tap <b>Share</b> → <b>Add to Home Screen</b>, then open mytime from your Home Screen.</div>`;
+  if (!pushSupported()) return '';
+  if (Notification.permission === 'denied') return `<div class="nbar">🔕 Notifications are blocked. Allow them for this site in your browser settings.</div>`;
+  return `<div class="nbar" data-act="enable-notif">🔔 Get notified about messages, friend requests & new posts <b>Turn on</b></div>`;
+}
+ACT['enable-notif'] = async () => {
+  try {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') { toast('Notifications not allowed'); document.querySelector('.nbar')?.replaceWith(Object.assign(document.createElement('div'), { innerHTML: notifBanner() }).firstElementChild || ''); return; }
+    await subscribePush();
+    document.querySelector('.nbar')?.remove();
+    alertUser('Notifications on', 'You will be notified about messages, requests and posts', 'welcome');
+    logAct('notifications', 'Turned on notifications');
+  } catch (e) { errH(e); }
+};
+const NOTIF_START = Date.now();
+function alertUser(title, body, tag) {
+  toast(`${title} · ${body}`.slice(0, 140));
+  try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
+  if (notifOn()) (swReg ? Promise.resolve(swReg) : navigator.serviceWorker.ready)
+    .then(r => r.showNotification(title, { body, icon: 'icon-192.png', badge: 'icon-192.png', tag, renotify: true, vibrate: [200, 100, 200] }))
+    .catch(() => {});
+}
+function startAlerts(me) {
+  // messages
+  S.appUnsubs.push(onSnapshot(query(collection(db, 'chats'), where('members', 'array-contains', me)), s => {
+    s.docChanges().forEach(ch => {
+      if (ch.type === 'removed') return;
+      const c = ch.doc.data({ serverTimestamps: 'estimate' });
+      if (!c.lastFrom || c.lastFrom === me || !c.updatedAt || tsMs(c.updatedAt) < NOTIF_START) return;
+      if (S.openChatId === ch.doc.id && document.visibilityState === 'visible') return;
+      getUser(c.lastFrom).then(u => alertUser('@' + u.username, c.lastMessage || 'New message', 'chat-' + ch.doc.id));
+    });
+  }, () => {}));
+  // friends' new posts & stories
+  const watchNew = (col, word) => S.appUnsubs.push(onSnapshot(query(collection(db, col), where('createdAt', '>=', Timestamp.fromMillis(NOTIF_START))), s => {
+    s.docChanges().forEach(ch => {
+      if (ch.type !== 'added') return;
+      const p = ch.doc.data({ serverTimestamps: 'estimate' });
+      if (p.deleted || p.uid === me || !S.friends.has(p.uid)) return;
+      alertUser(col === 'posts' ? 'New post' : 'New story', `@${p.username} ${word} ${p.mediaType === 'video' ? 'video' : 'photo'}${p.caption ? ': ' + p.caption.slice(0, 60) : ''}`, col + '-' + p.uid);
+    });
+  }, () => {}));
+  watchNew('posts', 'shared a new');
+  watchNew('stories', 'added a story');
+  if (notifOn()) subscribePush().catch(e => console.warn('push', e));
+}
+
 // ================= MAIN APP =================
 function beat() {
   if (document.visibilityState === 'visible' && S.stage === 'app')
@@ -591,9 +661,14 @@ function startApp() {
     S.friends = new Set(); s.forEach(d => { const o = d.data().members.find(m => m !== me); if (o) S.friends.add(o); });
     notifySocial();
   }, errH));
+  S.reqReady = false;
   S.appUnsubs.push(onSnapshot(query(collection(db, 'friendRequests'), where('to', '==', me), where('status', '==', 'pending')), s => {
+    const prev = S.inReq;
     S.inReq = new Map(); s.forEach(d => S.inReq.set(d.data().from, d.id)); notifySocial();
+    if (S.reqReady) [...S.inReq.keys()].filter(k => !prev.has(k)).forEach(k => getUser(k).then(u => alertUser('New friend request', `@${u.username} wants to be your friend`, 'req-' + k)));
+    S.reqReady = true;
   }, errH));
+  startAlerts(me);
   S.appUnsubs.push(onSnapshot(query(collection(db, 'friendRequests'), where('from', '==', me), where('status', '==', 'pending')), s => {
     S.outReq = new Set(); s.forEach(d => S.outReq.add(d.data().to)); notifySocial();
   }, errH));
@@ -615,7 +690,7 @@ ACT.tab = el => { closeAllSheets(); go(el.dataset.tab); };
 // ---------------- HOME: stories + feed ----------------
 function tabHome() {
   const v = $('#view');
-  v.innerHTML = `<div class="stories" id="stories"></div><div id="feed"><div class="loading">Loading…</div></div>`;
+  v.innerHTML = `${notifBanner()}<div class="stories" id="stories"></div><div id="feed"><div class="loading">Loading…</div></div>`;
   let posts = null, stories = [];
   const draw = () => { drawStories(stories); if (posts) drawFeed($('#feed'), posts); };
   S.tabRefresh = draw;
@@ -1153,6 +1228,7 @@ async function openChat(other) {
     <div class="sh-head"><button class="ib" data-act="close">${I.back}</button><span class="t" data-act="profile" data-uid="${other}">${avatar(u, 32)}${esc(u.username)}</span></div>
     <div class="sh-body"><div class="msgs" id="ms"><div class="loading">Loading…</div></div></div>
     <form class="composer" id="mf"><input name="t" placeholder="Message…" autocomplete="off" maxlength="2000"><button type="submit">Send</button></form>`);
+  S.openChatId = cid; sh.cleanup.push(() => { if (S.openChatId === cid) S.openChatId = null; });
   try { await setDoc(doc(db, 'chats', cid), { members: [me, other].sort() }, { merge: true }); }
   catch (e) { errH(e); return closeSheet(sh); }
   const body = $('.sh-body', sh);
