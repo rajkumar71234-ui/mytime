@@ -214,3 +214,41 @@ svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 /* toast */
 #toast{position:fixed;left:50%;bottom:calc(80px + var(--safe-b));transform:translateX(-50%) translateY(20px);background:#262626;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:99;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ---------- upload editor ---------- */
+.ed .inner{max-width:560px}
+.ed-head{display:flex;align-items:center;justify-content:space-between;padding:calc(10px + var(--safe-t)) 14px 10px}
+.ed-head b{font-size:16px}
+.ed-txt{background:none;border:0;color:#fff;font-size:15px;cursor:pointer;padding:6px 4px}
+.ed-done{color:#4cb5ff;font-weight:700}
+.ed-stage{flex:1;min-height:0;display:grid;place-items:center;position:relative;overflow:hidden}
+.ed-canvas{touch-action:none;cursor:grab;display:block;grid-area:1/1}
+.ed-grid,.ed-round{grid-area:1/1;pointer-events:none}
+.ed-grid{background-image:linear-gradient(rgba(255,255,255,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.35) 1px,transparent 1px);background-size:33.333% 33.333%;border:1px solid rgba(255,255,255,.7);box-sizing:border-box}
+.ed-round{border-radius:50%;box-shadow:0 0 0 2000px rgba(0,0,0,.55)}
+.ed-video{max-width:100%;max-height:100%;background:#000}
+.ed-tabs{display:flex;border-top:1px solid #262626}
+.ed-tabs button{flex:1;background:none;border:0;color:#a8a8a8;padding:12px;font-weight:600;cursor:pointer}
+.ed-tabs button.on{color:#fff;box-shadow:inset 0 -2px 0 #fff}
+.ed-panel{padding:12px 14px calc(14px + var(--safe-b));min-height:120px}
+.ed-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ed-chips button{background:#262626;color:#fff;border:0;border-radius:18px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.ed-chips button.on{background:#fff;color:#000}
+.ed-slider{display:flex;align-items:center;gap:10px;margin:8px 0;color:#ddd;font-size:13px}
+.ed-slider span{width:78px;flex:none}
+.ed-slider input{flex:1;accent-color:#fff}
+.ed-slider button{background:none;border:0;color:#a8a8a8;font-size:16px;cursor:pointer}
+.ed-val{width:42px;text-align:right;font-weight:600;color:#fff}
+.ed-hint{color:#a8a8a8;font-size:12px;margin:6px 0 0}
+.ed-filters{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+.ed-filters::-webkit-scrollbar{display:none}
+.ed-filters button{background:none;border:0;color:#ddd;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;cursor:pointer;flex:none}
+.ed-filters canvas{width:72px;height:72px;border-radius:8px;border:2px solid transparent}
+.ed-filters button.on canvas{border-color:#fff}
+.ed-filters button.on span{color:#fff;font-weight:700}
+.ed.busy .ed-head button:not(.ed-done),.ed.busy .ed-chips,.ed.busy .ed-trim{opacity:.4;pointer-events:none}
+/* media loading from Firebase */
+[data-media]:not([data-ready]){background:linear-gradient(90deg,#e9e9e9,#f6f6f6,#e9e9e9);background-size:200% 100%;animation:shim 1.2s infinite linear}
+.media [data-media]:not([data-ready]){min-height:320px;width:100%}
+.sv-media [data-media]:not([data-ready]){width:60%;aspect-ratio:9/16;background:#222}
+@keyframes shim{to{background-position:-200% 0}}

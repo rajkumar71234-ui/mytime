@@ -14,6 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { openPhotoEditor, openVideoEditor } from './editor.js';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -99,19 +100,19 @@ const LOGO_SM = `<div class="logo-sm"><img src="icon.svg" alt=""><span>mytime</s
 
 function avatar(u, size = 32) {
   const st = `width:${size}px;height:${size}px`;
-  if (u?.avatarUrl) return `<img class="av" style="${st}" src="${esc(u.avatarUrl)}" alt="">`;
+  if (u?.avatarUrl) return `<img class="av" style="${st}" ${srcAttr(u.avatarUrl)} alt="">`;
   return `<div class="av av-ph" style="${st};font-size:${Math.round(size * 0.42)}px">${esc((u?.username || '?')[0].toUpperCase())}</div>`;
 }
 function mediaHtml(m, opts = '') {
   if (!m?.mediaUrl) return '';
   return m.mediaType === 'video'
-    ? `<video src="${esc(m.mediaUrl)}#t=0.1" controls playsinline preload="metadata" ${opts}></video>`
-    : `<img src="${esc(m.mediaUrl)}" alt="" loading="lazy">`;
+    ? `<video ${srcAttr(m.mediaUrl, true)} controls playsinline preload="metadata" ${opts}></video>`
+    : `<img ${srcAttr(m.mediaUrl)} alt="">`;
 }
 function thumb(m) {
   return m.mediaType === 'video'
-    ? `<video src="${esc(m.mediaUrl)}#t=0.1" muted playsinline preload="metadata"></video><span class="vi">${I.play}</span>`
-    : `<img src="${esc(m.mediaUrl)}" alt="" loading="lazy">`;
+    ? `<video ${srcAttr(m.mediaUrl, true)} muted playsinline preload="metadata"></video><span class="vi">${I.play}</span>`
+    : `<img ${srcAttr(m.mediaUrl)} alt="">`;
 }
 
 // keyed list patching — keeps unchanged DOM nodes (videos don't restart)
@@ -152,7 +153,46 @@ async function logAct(type, text, extra = {}) {
   } catch (e) { console.warn('log failed', e); }
 }
 
-// Cloudinary upload (images compressed in-browser first)
+// ---------------- media storage (Firebase, private, chunked) ----------------
+// Photos & videos live in Firestore: media/{id} (info) + media/{id}/chunks/{000,001,...} (data).
+// Only approved members (and the admin) can read them.
+const CHUNK = 700 * 1024;               // bytes per chunk — stays under Firestore's 1 MB document limit
+const MAX_VIDEO = 15 * 1024 * 1024;
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+function srcAttr(url, video = false) {
+  if (url && url.startsWith('fs:')) return `data-media="${esc(url.slice(3))}"${video ? '' : ` src="${BLANK}"`}`;
+  return `src="${esc(url)}${video ? '#t=0.1' : ''}"`;
+}
+const mediaCache = new Map();
+function b64ToBytes(b64) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+function bytesToB64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+function loadMedia(id) {
+  if (!mediaCache.has(id)) mediaCache.set(id, (async () => {
+    const m = await getDoc(doc(db, 'media', id));
+    if (!m.exists()) throw new Error('missing media');
+    const { mime, chunks } = m.data();
+    const snap = await getDocs(collection(db, 'media', id, 'chunks'));
+    const parts = snap.docs.sort((a, b) => a.id.localeCompare(b.id)).map(d => b64ToBytes(d.data().d));
+    if (parts.length < chunks) throw new Error('incomplete media');
+    return URL.createObjectURL(new Blob(parts, { type: mime }));
+  })().catch(e => { mediaCache.delete(id); throw e; }));
+  return mediaCache.get(id);
+}
+function hydrateEl(el) {
+  if (el.dataset.ready || el.dataset.busy) return;
+  el.dataset.busy = '1';
+  loadMedia(el.dataset.media).then(url => {
+    el.src = el.tagName === 'VIDEO' ? url + '#t=0.1' : url;
+    el.dataset.ready = '1';
+  }).catch(e => { console.warn('media', e); el.dataset.ready = 'err'; }).finally(() => { delete el.dataset.busy; });
+}
+function hydrateMedia(root) {
+  if (root.matches?.('[data-media]')) hydrateEl(root);
+  root.querySelectorAll?.('[data-media]').forEach(hydrateEl);
+}
+new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) hydrateMedia(n); })
+  .observe(document.body, { childList: true, subtree: true });
+
 async function compressImage(file, max = 1280, q = 0.82) {
   try {
     const bmp = await createImageBitmap(file);
@@ -162,25 +202,21 @@ async function compressImage(file, max = 1280, q = 0.82) {
     return await new Promise(res => c.toBlob(b => res(b || file), 'image/jpeg', q));
   } catch { return file; }
 }
-function uploadMedia(file, onProgress) {
-  return new Promise(async (resolve, reject) => {
-    if (CLOUDINARY.cloudName.startsWith('PASTE')) return reject(new Error('Photo & video uploads are not switched on yet — the admin still needs to finish the Cloudinary setup.'));
-    const isVid = file.type.startsWith('video');
-    if (isVid && file.size > 60 * 1024 * 1024) return reject(new Error('Video is too large (max 60 MB).'));
-    const body = isVid ? file : await compressImage(file);
-    const fd = new FormData();
-    fd.append('file', body); fd.append('upload_preset', CLOUDINARY.uploadPreset); fd.append('folder', 'mytime');
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY.cloudName}/${isVid ? 'video' : 'image'}/upload`);
-    xhr.upload.onprogress = e => e.lengthComputable && onProgress?.(e.loaded / e.total);
-    xhr.onload = () => {
-      let j = {}; try { j = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve({ url: j.secure_url, type: isVid ? 'video' : 'image' });
-      else reject(new Error(j.error?.message || 'Upload failed'));
-    };
-    xhr.onerror = () => reject(new Error('Upload failed — check your connection.'));
-    xhr.send(fd);
-  });
+async function uploadMedia(file, onProgress, kind = 'post') {
+  const isVid = file.type.startsWith('video');
+  const blob = isVid ? file : (file.type === 'image/jpeg' && file.size < 700 * 1024 ? file : await compressImage(file));
+  if (isVid && blob.size > MAX_VIDEO) throw new Error('Video is too large (max 15 MB). Trim it in the editor.');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const n = Math.max(1, Math.ceil(bytes.length / CHUNK));
+  const mime = blob.type || (isVid ? 'video/mp4' : 'image/jpeg');
+  const ref = await addDoc(collection(db, 'media'), { uid: uid(), kind, type: isVid ? 'video' : 'image', mime, size: bytes.length, chunks: n, complete: false, createdAt: serverTimestamp() });
+  for (let i = 0; i < n; i++) {
+    await setDoc(doc(db, 'media', ref.id, 'chunks', String(i).padStart(3, '0')), { d: bytesToB64(bytes.subarray(i * CHUNK, (i + 1) * CHUNK)) });
+    onProgress?.((i + 1) / n);
+  }
+  await updateDoc(ref, { complete: true });
+  mediaCache.set(ref.id, Promise.resolve(URL.createObjectURL(new Blob([bytes], { type: mime }))));
+  return { url: 'fs:' + ref.id, type: isVid ? 'video' : 'image' };
 }
 
 // ---------------- rendering primitives ----------------
@@ -389,8 +425,11 @@ function profileFormHtml(me, submitLabel) {
 }
 function wireProfileForm(f, onDone) {
   let file = null;
-  f.photo.addEventListener('change', () => {
-    file = f.photo.files[0]; if (!file) return;
+  f.photo.addEventListener('change', async () => {
+    const picked = f.photo.files[0]; f.photo.value = ''; if (!picked) return;
+    const edited = await openPhotoEditor(picked, { aspects: ['1:1'], aspect: '1:1', out: 480, round: true });
+    if (!edited) return;
+    file = new File([edited], 'avatar.jpg', { type: 'image/jpeg' });
     const old = $('#pf-pick .av', f), img = document.createElement('img');
     img.className = 'av'; img.style.cssText = 'width:90px;height:90px'; img.src = URL.createObjectURL(file); old.replaceWith(img);
   });
@@ -399,7 +438,7 @@ function wireProfileForm(f, onDone) {
     const upd = { name: f.name.value.trim(), dob: f.dob.value, gender: f.gender.value, city: f.city.value.trim(), bio: f.bio.value.trim() };
     if (file) {
       const pg = $('.prog', f); pg.hidden = false;
-      const r = await uploadMedia(file, p => ($('i', pg).style.width = (p * 100) + '%'));
+      const r = await uploadMedia(file, p => ($('i', pg).style.width = (p * 100) + '%'), 'avatar');
       upd.avatarUrl = r.url;
     }
     await onDone(upd);
@@ -694,8 +733,14 @@ function openCreate(kind) {
   };
   f.querySelectorAll('.seg button').forEach(b => b.onclick = () => setKind(b.dataset.k));
   setKind(kind);
-  f.file.addEventListener('change', () => {
-    file = f.file.files[0]; if (!file) return;
+  f.file.addEventListener('change', async () => {
+    const picked = f.file.files[0]; f.file.value = ''; if (!picked) return;
+    const isVid = picked.type.startsWith('video');
+    const edited = isVid
+      ? await openVideoEditor(picked, { maxBytes: MAX_VIDEO, maxSeconds: 60 })
+      : await openPhotoEditor(picked, kind === 'story' ? { aspects: ['9:16', 'orig', '4:5', '1:1'], aspect: '9:16' } : { aspects: ['4:5', '1:1', 'orig', '16:9'], aspect: '4:5' });
+    if (!edited) return;
+    file = edited instanceof File ? edited : new File([edited], 'photo.jpg', { type: 'image/jpeg' });
     const url = URL.createObjectURL(file), drop = $('#drop', sh);
     drop.querySelector(':scope > div')?.remove(); drop.querySelector('img,video')?.remove();
     drop.insertAdjacentHTML('afterbegin', file.type.startsWith('video') ? `<video src="${url}" controls playsinline></video>` : `<img src="${url}">`);
@@ -703,7 +748,7 @@ function openCreate(kind) {
   bindForm(f, async () => {
     if (!file) throw new Error('Choose a photo or video first.');
     const pg = $('.prog', sh); pg.hidden = false;
-    const up = await uploadMedia(file, p => ($('i', pg).style.width = (p * 100) + '%'));
+    const up = await uploadMedia(file, p => ($('i', pg).style.width = (p * 100) + '%'), kind);
     const base = { uid: uid(), username: S.me.username, avatarUrl: S.me.avatarUrl || '', mediaUrl: up.url, mediaType: up.type, deleted: false, createdAt: serverTimestamp() };
     if (kind === 'post') {
       const ref = await addDoc(collection(db, 'posts'), { ...base, caption: f.cap.value.trim(), likes: [], dislikes: [], commentCount: 0 });
@@ -740,7 +785,7 @@ function openStory(owner) {
     bars.forEach((b, k) => { b.className = k < i ? 'done' : ''; b.querySelector('b').style.animationDuration = ''; });
     $('.t-ago', sh).textContent = timeAgo(s.createdAt);
     const box = $('.sv-media', sh);
-    box.innerHTML = s.mediaType === 'video' ? `<video src="${esc(s.mediaUrl)}" autoplay playsinline ${S.storyMuted === false ? '' : 'muted'}></video>` : `<img src="${esc(s.mediaUrl)}">`;
+    box.innerHTML = s.mediaType === 'video' ? `<video ${srcAttr(s.mediaUrl)} autoplay playsinline ${S.storyMuted === false ? '' : 'muted'}></video>` : `<img ${srcAttr(s.mediaUrl)}>`;
     const run = ms => { const b = bars[i]; b.className = 'run'; b.querySelector('b').style.animationDuration = ms + 'ms'; timer = setTimeout(() => { i++; show(); }, ms); };
     if (s.mediaType === 'video') {
       const vd = box.querySelector('video');
@@ -1099,7 +1144,7 @@ ACT.admin = () => {
 function logHtml(l, showUser = true) {
   return `<div class="log ${BAD.has(l.type) ? 'bad' : ''}"><div class="tm">${timeAgo(l.createdAt)}</div>
     <div>${showUser ? `<b data-act="admin-user" data-uid="${l.uid}" style="cursor:pointer">@${esc(l.username || '?')}</b> ` : ''}${esc(l.text)}
-    ${l.mediaUrl ? ` · <a href="${esc(l.mediaUrl)}" target="_blank" style="color:var(--accent)">media</a>` : ''}<div class="muted sm">${fullTime(l.createdAt)}</div></div></div>`;
+    ${l.mediaUrl ? ' · 📷' : ''}<div class="muted sm">${fullTime(l.createdAt)}</div></div></div>`;
 }
 ACT['adm-set'] = async el => {
   const { uid: id, s } = el.dataset; el.disabled = true;
@@ -1146,13 +1191,13 @@ function openAdminUser(id) {
           <div>Approved</div><div>${u.approvedAt ? fullTime(u.approvedAt) : '—'}</div>
         </div><div style="padding:0 14px 20px">${acts.join('')}</div>`;
     } else if (tab === 'posts') {
-      box().innerHTML = posts.length ? posts.map(p => `<div class="acard ${p.deleted ? 'deleted' : ''}"><a class="th" href="${esc(p.mediaUrl)}" target="_blank">${thumb(p)}</a>
+      box().innerHTML = posts.length ? posts.map(p => `<div class="acard ${p.deleted ? 'deleted' : ''}"><div class="th">${thumb(p)}</div>
         <div style="flex:1;min-width:0;font-size:14px">${esc(p.caption) || '<span class="muted">No caption</span>'}
         <div class="muted sm">${fullTime(p.createdAt)} · ♥ ${(p.likes || []).length} · 👎 ${(p.dislikes || []).length} · 💬 ${p.commentCount || 0}</div>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${delTag(p)}${!p.deleted ? `<button class="btn sm danger" data-act="adm-hide" data-col="posts" data-id="${p.id}">Remove</button>` : ''}
         <button class="btn sm" data-act="adm-comments" data-id="${p.id}">Comments</button></div></div></div>`).join('') : `<div class="empty">No posts</div>`;
     } else if (tab === 'stories') {
-      box().innerHTML = stories.length ? stories.map(s => `<div class="acard ${s.deleted ? 'deleted' : ''}"><a class="th" href="${esc(s.mediaUrl)}" target="_blank">${thumb(s)}</a>
+      box().innerHTML = stories.length ? stories.map(s => `<div class="acard ${s.deleted ? 'deleted' : ''}"><div class="th">${thumb(s)}</div>
         <div style="flex:1;font-size:14px">${s.mediaType} story<div class="muted sm">${fullTime(s.createdAt)} · 👁 ${(s.viewers || []).length} views · ${Date.now() - tsMs(s.createdAt) > DAY_MS ? 'expired' : 'live'}</div>
         <div style="margin-top:6px">${delTag(s)}</div></div></div>`).join('') : `<div class="empty">No stories</div>`;
     } else if (tab === 'chats') {

@@ -139,6 +139,25 @@ service cloud.firestore {
         || onlyKeys(['viewers']));
     }
 
+    // ---------- media: photos & videos stored in Firestore (chunked) ----------
+    match /media/{mid} {
+      allow read: if approved();
+      allow create: if approved()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.complete == false;
+      allow update: if approved()
+        && resource.data.uid == request.auth.uid
+        && onlyKeys(['complete'])
+        && request.resource.data.complete == true;
+
+      match /chunks/{cid} {
+        allow read: if approved();
+        allow create: if approved()
+          && get(/databases/$(database)/documents/media/$(mid)).data.uid == request.auth.uid
+          && get(/databases/$(database)/documents/media/$(mid)).data.complete == false;
+      }
+    }
+
     // ---------- activity log (write-only for users, admin reads) ----------
     match /logs/{lid} {
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
