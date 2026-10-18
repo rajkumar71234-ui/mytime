@@ -14,6 +14,7 @@ import {
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
+const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE') || CLOUDINARY.cloudName.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
@@ -436,7 +437,7 @@ async function routeAuth(user) {
     onMe();
   }, e => { console.error(e); showLogin('Could not load your account: ' + friendly(e)); }));
 }
-onAuthStateChanged(auth, user => { if (!S.signingUp) routeAuth(user); });
+onAuthStateChanged(auth, user => { if (!S.signingUp && !NEEDS_SETUP) routeAuth(user); });
 
 function stageOf(me) {
   if (!me) return 'username';
@@ -543,7 +544,7 @@ function drawStories(stories) {
   live.forEach(s => { if (!S.storyGroups.has(s.uid)) S.storyGroups.set(s.uid, []); S.storyGroups.get(s.uid).push(s); });
   const mine = S.storyGroups.get(me);
   let html = `<div class="st" data-act="${mine ? 'story' : 'create-story'}" data-uid="${me}">
-      <div class="ring ${mine ? (mine.every(x => true) ? 'seen' : '') : 'none'}">${avatar(S.me, 62)}${mine ? '' : '<span class="plus">+</span>'}</div><span>Your story</span></div>`;
+      <div class="ring ${mine ? '' : 'none'}">${avatar(S.me, 62)}${mine ? '' : '<span class="plus">+</span>'}</div><span>Your story</span></div>`;
   const others = [...S.storyGroups.entries()].filter(([u]) => u !== me)
     .map(([u, list]) => ({ u, list, seen: list.every(x => (x.viewers || []).includes(me)), last: tsMs(list[list.length - 1].createdAt) }))
     .sort((a, b) => (a.seen - b.seen) || (b.last - a.last));
@@ -735,7 +736,7 @@ function openStory(owner) {
     bars.forEach((b, k) => { b.className = k < i ? 'done' : ''; b.querySelector('b').style.animationDuration = ''; });
     $('.t-ago', sh).textContent = timeAgo(s.createdAt);
     const box = $('.sv-media', sh);
-    box.innerHTML = s.mediaType === 'video' ? `<video src="${esc(s.mediaUrl)}" autoplay playsinline></video>` : `<img src="${esc(s.mediaUrl)}">`;
+    box.innerHTML = s.mediaType === 'video' ? `<video src="${esc(s.mediaUrl)}" autoplay playsinline ${S.storyMuted === false ? '' : 'muted'}></video>` : `<img src="${esc(s.mediaUrl)}">`;
     const run = ms => { const b = bars[i]; b.className = 'run'; b.querySelector('b').style.animationDuration = ms + 'ms'; timer = setTimeout(() => { i++; show(); }, ms); };
     if (s.mediaType === 'video') {
       const vd = box.querySelector('video');
@@ -745,7 +746,7 @@ function openStory(owner) {
     if (mine) {
       $('.sv-foot', sh).innerHTML = `<button data-act="story-viewers">👁 ${(s.viewers || []).length} viewer${(s.viewers || []).length === 1 ? '' : 's'}</button><button data-act="story-del">Delete</button>`;
     } else {
-      $('.sv-foot', sh).innerHTML = '';
+      $('.sv-foot', sh).innerHTML = s.mediaType === 'video' ? `<button data-act="story-sound">${S.storyMuted === false ? '🔊 Sound on' : '🔇 Tap for sound'}</button><span></span>` : '';
       if (!(s.viewers || []).includes(me)) {
         updateDoc(doc(db, 'stories', s.id), { viewers: arrayUnion(me) }).catch(() => {});
         (s.viewers = s.viewers || []).push(me);
@@ -754,6 +755,11 @@ function openStory(owner) {
   };
   $('.tapL', sh).onclick = () => { i--; show(); };
   $('.tapR', sh).onclick = () => { i++; show(); };
+  ACT['story-sound'] = btn => {
+    const vd = $('.sv-media video', sh); if (!vd) return;
+    S.storyMuted = !vd.muted; vd.muted = S.storyMuted;
+    btn.textContent = vd.muted ? '🔇 Tap for sound' : '🔊 Sound on';
+  };
   ACT['story-del'] = async () => {
     const s = list[i]; if (!confirm('Delete this story?')) return;
     await updateDoc(doc(db, 'stories', s.id), { deleted: true, deletedAt: serverTimestamp() }).catch(errH);
@@ -778,7 +784,7 @@ function friendBtn(id) {
 function userRow(u, extra = '') {
   return `<div class="row" data-act="profile" data-uid="${u.id}">${avatar(u, 46)}
     <div class="mid"><b>${esc(u.username)}</b><div>${esc(u.name || '')}${extra}</div></div>
-    <div class="btns" onclick="event.stopPropagation()">${friendBtn(u.id)}</div></div>`;
+    <div class="btns">${friendBtn(u.id)}</div></div>`;
 }
 function tabSearch() {
   const v = $('#view');
@@ -846,7 +852,7 @@ ACT.requests = () => {
     $('#rq', sh).innerHTML =
       `<div class="sec-t">Requests</div>` +
       (inc.length ? inc.map(u => `<div class="row" data-act="profile" data-uid="${u.id}">${avatar(u, 46)}<div class="mid"><b>${esc(u.username)}</b><div>${esc(u.name || '')}</div></div>
-        <div class="btns" onclick="event.stopPropagation()"><button class="btn sm primary" data-act="accept" data-uid="${u.id}">Confirm</button><button class="btn sm" data-act="decline" data-uid="${u.id}">Delete</button></div></div>`).join('')
+        <div class="btns"><button class="btn sm primary" data-act="accept" data-uid="${u.id}">Confirm</button><button class="btn sm" data-act="decline" data-uid="${u.id}">Delete</button></div></div>`).join('')
         : `<div class="row muted">No new requests</div>`) +
       (out.length ? `<div class="sec-t">Sent</div>` + out.map(u => userRow(u)).join('') : '');
   };
@@ -928,7 +934,7 @@ ACT['friends-list'] = () => {
     const us = await Promise.all([...S.friends].map(id => getUser(id)));
     if (!sh.isConnected) return;
     $('#fl', sh).innerHTML = us.length ? us.map(u => `<div class="row" data-act="profile" data-uid="${u.id}">${avatar(u, 46)}<div class="mid"><b>${esc(u.username)}</b><div>${esc(u.name || '')}</div></div>
-      <div class="btns" onclick="event.stopPropagation()"><button class="btn sm" data-act="message" data-uid="${u.id}">Message</button><button class="btn sm danger" data-act="unfriend" data-uid="${u.id}">Remove</button></div></div>`).join('')
+      <div class="btns"><button class="btn sm" data-act="message" data-uid="${u.id}">Message</button><button class="btn sm danger" data-act="unfriend" data-uid="${u.id}">Remove</button></div></div>`).join('')
       : `<div class="empty"><b>No friends yet</b>Use search to find people.</div>`;
   };
   S.social.add(draw); sh.cleanup.push(() => S.social.delete(draw)); draw();
@@ -1014,7 +1020,7 @@ ACT.admin = () => {
       box.innerHTML = `<div class="stat-row"><div><b>${users.length}</b><span>accounts</span></div><div><b>${online.length}</b><span>online now</span></div><div><b>${pend.length}</b><span>waiting</span></div></div>` +
         (pend.length ? pend.sort((a, b) => tsMs(a.createdAt) - tsMs(b.createdAt)).map(u => `<div class="row" data-act="admin-user" data-uid="${u.id}">${avatar(u, 46)}
           <div class="mid"><b>@${esc(u.username)}</b><div>${esc(u.email)}</div><div>Signed up ${timeAgo(u.createdAt)} ago · ${u.emailVerified ? '✅ email verified' : '⚠️ email not verified'}</div></div>
-          <div class="btns" onclick="event.stopPropagation()"><button class="btn sm primary" data-act="adm-set" data-uid="${u.id}" data-s="approved">Approve</button><button class="btn sm danger" data-act="adm-set" data-uid="${u.id}" data-s="rejected">Reject</button></div></div>`).join('')
+          <div class="btns"><button class="btn sm primary" data-act="adm-set" data-uid="${u.id}" data-s="approved">Approve</button><button class="btn sm danger" data-act="adm-set" data-uid="${u.id}" data-s="rejected">Reject</button></div></div>`).join('')
           : `<div class="empty"><b>All caught up</b>No accounts waiting for approval.</div>`);
     } else if (tab === 'users') {
       const sorted = [...users].sort((a, b) => tsMs(b.lastSeen || 0) - tsMs(a.lastSeen || 0));
@@ -1139,6 +1145,6 @@ ACT['adm-chat'] = el => {
 };
 
 // config sanity check
-if (firebaseConfig.apiKey.startsWith('PASTE')) {
+if (NEEDS_SETUP) {
   render(authShell(`<h2>Setup needed</h2><div class="note">Open <b>config.js</b> and paste your Firebase and Cloudinary details. See <b>SETUP.md</b>.</div>`));
 }
