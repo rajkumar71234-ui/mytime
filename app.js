@@ -14,7 +14,7 @@ import {
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE') || CLOUDINARY.cloudName.startsWith('PASTE');
+const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
@@ -163,6 +163,7 @@ async function compressImage(file, max = 1280, q = 0.82) {
 }
 function uploadMedia(file, onProgress) {
   return new Promise(async (resolve, reject) => {
+    if (CLOUDINARY.cloudName.startsWith('PASTE')) return reject(new Error('Photo & video uploads are not switched on yet — the admin still needs to finish the Cloudinary setup.'));
     const isVid = file.type.startsWith('video');
     if (isVid && file.size > 60 * 1024 * 1024) return reject(new Error('Video is too large (max 60 MB).'));
     const body = isVid ? file : await compressImage(file);
