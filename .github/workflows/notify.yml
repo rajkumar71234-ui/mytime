@@ -1,0 +1,29 @@
+name: mytime notifications
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every 5 minutes (GitHub may run it a few minutes late)
+  workflow_dispatch:        # "Run workflow" button for testing
+
+concurrency:
+  group: mytime-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            notify.mjs
+            package.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund --omit=dev
+      - run: node notify.mjs
+        env:
+          FIREBASE_SA: ${{ secrets.FIREBASE_SA }}
