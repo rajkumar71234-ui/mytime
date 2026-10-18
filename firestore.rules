@@ -51,6 +51,10 @@ service cloud.firestore {
         && (request.resource.data.emailVerified != true || request.auth.token.email_verified == true)
         && (!('profileComplete' in request.resource.data.diff(resource.data).affectedKeys())
             || resource.data.status == 'approved');
+      // a user may delete (deactivate) their own account
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.status == 'deleted'
+        && onlyKeys(['status','deletedAt']);
     }
 
     // ---------- friend requests ----------

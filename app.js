@@ -6,7 +6,8 @@ import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-  sendEmailVerification, sendPasswordResetEmail, signOut, reload
+  sendEmailVerification, sendPasswordResetEmail, signOut, reload,
+  EmailAuthProvider, reauthenticateWithCredential, deleteUser
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where,
@@ -369,8 +370,8 @@ function showPending() {
 function showBlocked(kind) {
   render(authShell(`
     <div class="big-ico">${I.block}</div>
-    <h2>${kind === 'rejected' ? 'Account not approved' : 'Account suspended'}</h2>
-    <p class="muted">${kind === 'rejected' ? 'The admin did not approve this account.' : 'This account has been suspended by the admin.'} Please contact the admin.</p>
+    <h2>${{ rejected: 'Account not approved', suspended: 'Account suspended', deleted: 'Account deleted' }[kind]}</h2>
+    <p class="muted">${{ rejected: 'The admin did not approve this account.', suspended: 'This account has been suspended by the admin.', deleted: 'This account has been deleted.' }[kind]} Please contact the admin.</p>
     <a class="link" data-act="logout">Log out</a>`));
 }
 
@@ -445,10 +446,12 @@ function stageOf(me) {
   if (me.status === 'pending') return 'pending';
   if (me.status === 'rejected') return 'rejected';
   if (me.status === 'suspended') return 'suspended';
+  if (me.status === 'deleted') return 'deleted';
   if (!me.profileComplete) return 'details';
   return 'app';
 }
 async function onMe() {
+  if (S.deleting) return;
   const me = S.me;
   if (me && isAdmin() && me.status !== 'approved') {
     try { await updateDoc(doc(db, 'users', uid()), { status: 'approved', approvedAt: serverTimestamp() }); return; }
@@ -462,7 +465,7 @@ async function onMe() {
   if (prev === 'pending' && st === 'details') toast('Your account has been approved!');
   ({
     username: showChooseUsername, pending: showPending, details: showDetails, app: startApp,
-    rejected: () => showBlocked('rejected'), suspended: () => showBlocked('suspended')
+    rejected: () => showBlocked('rejected'), suspended: () => showBlocked('suspended'), deleted: () => showBlocked('deleted')
   })[st]();
 }
 
@@ -909,7 +912,8 @@ function tabProfile() {
         <div><b>${posts.length}</b><span>posts</span></div>
         <div data-act="friends-list" style="cursor:pointer"><b>${S.friends.size}</b><span>friends</span></div></div></div>
       <div class="nm">${esc(S.me.name)}</div><div class="muted sm">@${esc(S.me.username)}${S.me.city ? ' · ' + esc(S.me.city) : ''}</div><div class="bio">${esc(S.me.bio)}</div>
-      <div class="btns"><button class="btn" data-act="edit-profile">Edit profile</button><button class="btn" data-act="friends-list">Friends</button><button class="btn" data-act="logout">Log out</button></div></div>
+      <div class="btns"><button class="btn" data-act="edit-profile">Edit profile</button><button class="btn" data-act="friends-list">Friends</button><button class="btn" data-act="logout">Log out</button></div>
+      ${isAdmin() ? '' : '<a class="link" data-act="delete-account" style="color:var(--red);margin-top:14px">Delete account</a>'}</div>
       ${posts.length ? `<div class="grid">${posts.map(p => `<div class="cell" data-act="open-post" data-id="${p.id}">${thumb(p)}</div>`).join('')}</div>`
         : `<div class="lock">Share your first photo or video with the + button</div>`}`;
   };
@@ -928,6 +932,58 @@ ACT['edit-profile'] = () => {
     logAct('profile', 'Updated profile'); closeSheet(sh); toast('Profile updated');
     if (S.tab === 'profile') S.tabRefresh?.();
   });
+};
+// ---------- account deletion ----------
+// Hides everything the account posted and removes its friendships. Admin still sees the full history.
+async function removeAccountContent(id) {
+  const [ps, ss, fs] = await Promise.all([
+    getDocs(query(collection(db, 'posts'), where('uid', '==', id))),
+    getDocs(query(collection(db, 'stories'), where('uid', '==', id))),
+    getDocs(query(collection(db, 'friendships'), where('members', 'array-contains', id)))
+  ]);
+  const ops = [];
+  ps.forEach(d => { if (!d.data().deleted) ops.push(b => b.update(d.ref, { deleted: true, deletedAt: serverTimestamp() })); });
+  ss.forEach(d => { if (!d.data().deleted) ops.push(b => b.update(d.ref, { deleted: true, deletedAt: serverTimestamp() })); });
+  fs.forEach(d => ops.push(b => b.delete(d.ref)));
+  for (let i = 0; i < ops.length; i += 400) {
+    const b = writeBatch(db); ops.slice(i, i + 400).forEach(o => o(b)); await b.commit();
+  }
+}
+ACT['delete-account'] = () => {
+  const sh = openSheet(`<div class="sh-head"><button class="ib" data-act="close">${I.back}</button><span class="t">Delete account</span></div>
+    <div class="sh-body"><form class="form" id="del-f" style="padding:16px">
+      <div class="note">This permanently deletes your mytime account. Your profile, posts and stories will be removed and your friends list cleared. You won't be able to log in with this account again.</div>
+      <label>Your password</label>
+      <input name="pw" type="password" autocomplete="current-password" required>
+      <label>Type DELETE to confirm</label>
+      <input name="confirm" autocapitalize="characters" autocomplete="off" required>
+      <button class="btn danger" type="submit">Delete my account</button><p class="err"></p>
+    </form></div>`);
+  bindForm($('#del-f', sh), async f => {
+    if (f.confirm.value.trim().toUpperCase() !== 'DELETE') throw new Error('Type DELETE to confirm.');
+    if (isAdmin()) throw new Error('The admin account cannot be deleted from the app.');
+    const user = auth.currentUser, me = uid(), un = S.me.username;
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, f.pw.value));
+    S.deleting = true;
+    try {
+      await removeAccountContent(me);
+      await logAct('delete-account', `Deleted own account @${un}`);
+      await updateDoc(doc(db, 'users', me), { status: 'deleted', deletedAt: serverTimestamp() });
+      await deleteUser(user);
+    } finally { S.deleting = false; }
+    toast('Your account has been deleted');
+  });
+};
+ACT['adm-delete'] = async el => {
+  const id = el.dataset.uid, u = S.users[id];
+  if (!confirm(`Delete @${u?.username}'s account? They are logged out for good and their posts disappear for everyone. You will still see their full history here.`)) return;
+  el.disabled = true;
+  try {
+    await removeAccountContent(id);
+    await updateDoc(doc(db, 'users', id), { status: 'deleted', deletedAt: serverTimestamp(), deletedBy: 'admin' });
+    logAct('admin', `Admin deleted @${u?.username}'s account`, { refId: id });
+    toast(`@${u?.username}'s account deleted`);
+  } catch (e) { errH(e); el.disabled = false; }
 };
 ACT['friends-list'] = () => {
   const sh = openSheet(`<div class="sh-head"><button class="ib" data-act="close">${I.back}</button><span class="t">Friends</span></div><div class="sh-body" id="fl"></div>`);
@@ -1071,9 +1127,10 @@ function openAdminUser(id) {
     sh.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
     if (tab === 'info') {
       const acts = [];
-      if (u.status !== 'approved') acts.push(`<button class="btn primary" data-act="adm-set" data-uid="${id}" data-s="approved">${u.status === 'pending' ? 'Approve' : 'Re-activate'}</button>`);
+      if (u.status !== 'approved' && u.status !== 'deleted') acts.push(`<button class="btn primary" data-act="adm-set" data-uid="${id}" data-s="approved">${u.status === 'pending' ? 'Approve' : 'Re-activate'}</button>`);
       if (u.status === 'approved' && !isAdminEmail(u.email)) acts.push(`<button class="btn danger" data-act="adm-set" data-uid="${id}" data-s="suspended">Suspend</button>`);
       if (u.status === 'pending') acts.push(`<button class="btn danger" data-act="adm-set" data-uid="${id}" data-s="rejected">Reject</button>`);
+      if (u.status !== 'deleted' && !isAdminEmail(u.email)) acts.push(`<button class="btn danger" data-act="adm-delete" data-uid="${id}">Delete account</button>`);
       box().innerHTML = `<div class="prof"><div class="prof-top">${avatar(u, 80)}<div class="stats">
           <div><b>${posts.length}</b><span>posts</span></div><div><b>${stories.length}</b><span>stories</span></div><div><b>${chats.length}</b><span>chats</span></div></div></div></div>
         <div class="kv">
