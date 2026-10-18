@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018c';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018d';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018c';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018d';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,6 +76,10 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
+const APP_VERSION = '20261018d';
+// never fail silently on phones: show any unexpected error
+window.addEventListener('unhandledrejection', e => { console.error(e.reason); toast('Something went wrong: ' + friendly(e.reason)); });
+window.addEventListener('error', e => { if (e.message) toast('Something went wrong: ' + e.message); });
 
 const I = {
   home: '<svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>',
@@ -427,7 +431,8 @@ function wireProfileForm(f, onDone) {
   let file = null;
   f.photo.addEventListener('change', async () => {
     const picked = f.photo.files[0]; f.photo.value = ''; if (!picked) return;
-    const edited = await openPhotoEditor(picked, { aspects: ['1:1'], aspect: '1:1', out: 480, round: true });
+    const edited = await openPhotoEditor(picked, { aspects: ['1:1'], aspect: '1:1', out: 480, round: true })
+      .catch(err => { console.error(err); toast('Photo editor not available on this device — using the photo as it is'); return picked; });
     if (!edited) return;
     file = new File([edited], 'avatar.jpg', { type: 'image/jpeg' });
     const old = $('#pf-pick .av', f), img = document.createElement('img');
@@ -737,8 +742,9 @@ function openCreate(kind) {
     const picked = f.file.files[0]; f.file.value = ''; if (!picked) return;
     const isVid = picked.type.startsWith('video');
     const edited = isVid
-      ? await openVideoEditor(picked, { maxBytes: MAX_VIDEO, maxSeconds: 60 })
-      : await openPhotoEditor(picked, kind === 'story' ? { aspects: ['9:16', 'orig', '4:5', '1:1'], aspect: '9:16' } : { aspects: ['4:5', '1:1', 'orig', '16:9'], aspect: '4:5' });
+      ? await openVideoEditor(picked, { maxBytes: MAX_VIDEO, maxSeconds: 60 }).catch(err => { console.error(err); toast('Video editor not available on this device — using the video as it is'); return picked; })
+      : await openPhotoEditor(picked, kind === 'story' ? { aspects: ['9:16', 'orig', '4:5', '1:1'], aspect: '9:16' } : { aspects: ['4:5', '1:1', 'orig', '16:9'], aspect: '4:5' })
+          .catch(err => { console.error(err); toast('Photo editor not available on this device — using the photo as it is'); return picked; });
     if (!edited) return;
     file = edited instanceof File ? edited : new File([edited], 'photo.jpg', { type: 'image/jpeg' });
     const url = URL.createObjectURL(file), drop = $('#drop', sh);
@@ -960,7 +966,8 @@ function tabProfile() {
       <div class="btns"><button class="btn" data-act="edit-profile">Edit profile</button><button class="btn" data-act="friends-list">Friends</button><button class="btn" data-act="logout">Log out</button></div>
       ${isAdmin() ? '' : '<a class="link" data-act="delete-account" style="color:var(--red);margin-top:14px">Delete account</a>'}</div>
       ${posts.length ? `<div class="grid">${posts.map(p => `<div class="cell" data-act="open-post" data-id="${p.id}">${thumb(p)}</div>`).join('')}</div>`
-        : `<div class="lock">Share your first photo or video with the + button</div>`}`;
+        : `<div class="lock">Share your first photo or video with the + button</div>`}
+      <div class="muted sm" style="text-align:center;padding:24px 0 8px">mytime · version ${APP_VERSION}</div>`;
   };
   S.tabRefresh = draw;
   S.tabUnsubs.push(onSnapshot(query(collection(db, 'posts'), where('uid', '==', me.id)), s => {
