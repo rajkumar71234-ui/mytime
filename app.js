@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018d';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018e';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018d';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018e';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,7 +76,19 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
-const APP_VERSION = '20261018d';
+const APP_VERSION = '20261018e';
+// auto-update: if a newer version is published, refresh the cached files and reload once
+(async () => {
+  try {
+    const live = (await fetch('version.txt?t=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '')).trim();
+    if (!live || live === APP_VERSION) return;
+    const key = 'mytime-upd-' + live;
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+    await Promise.all(['./', 'index.html'].map(p => fetch(p, { cache: 'reload' }).catch(() => {})));
+    location.reload();
+  } catch {}
+})();
 // never fail silently on phones: show any unexpected error
 window.addEventListener('unhandledrejection', e => { console.error(e.reason); toast('Something went wrong: ' + friendly(e.reason)); });
 window.addEventListener('error', e => { if (e.message) toast('Something went wrong: ' + e.message); });
