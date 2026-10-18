@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018c';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018c';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
