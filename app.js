@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018e';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018f';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -14,7 +14,7 @@ import {
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
   writeBatch, runTransaction, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018e';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018f';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,7 +76,7 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
-const APP_VERSION = '20261018e';
+const APP_VERSION = '20261018f';
 // auto-update: if a newer version is published, refresh the cached files and reload once
 (async () => {
   try {
@@ -218,8 +218,38 @@ async function compressImage(file, max = 1280, q = 0.82) {
     return await new Promise(res => c.toBlob(b => res(b || file), 'image/jpeg', q));
   } catch { return file; }
 }
+// HEIC/HEIF photos (iPhone, Xiaomi, Samsung…) can't be opened by Chrome — convert them to JPG first
+async function isHeic(file) {
+  if (/hei[cf]/i.test(file.type || '') || /\.(heic|heif)$/i.test(file.name || '')) return true;
+  try {
+    const h = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    const s = String.fromCharCode(...h.slice(4, 12));
+    return s.startsWith('ftyp') && /heic|heix|hevc|hevx|heim|heis|mif1|msf1/.test(s.slice(4));
+  } catch { return false; }
+}
+let heicLib = null;
+async function toJpegIfHeic(file) {
+  if (!file || (file.type || '').startsWith('video') || !(await isHeic(file))) return file;
+  try { const b = await createImageBitmap(file); b.close?.(); return file; } catch {}   // this browser can open it (e.g. Safari)
+  toast('Converting photo…');
+  heicLib = heicLib || new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.onload = () => res(window.heic2any);
+    s.onerror = () => { heicLib = null; rej(new Error('Could not load the photo converter — check your internet.')); };
+    document.head.appendChild(s);
+  });
+  const conv = await (await heicLib)({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+  const jpg = Array.isArray(conv) ? conv[0] : conv;
+  return new File([jpg], (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+}
 async function uploadMedia(file, onProgress, kind = 'post') {
   const isVid = file.type.startsWith('video');
+  if (!isVid) {
+    file = await toJpegIfHeic(file);
+    const ok = await createImageBitmap(file).then(b => { b.close?.(); return true; }).catch(() => false);
+    if (!ok) throw new Error('This photo format can’t be opened here. Please choose a JPG or PNG photo.');
+  }
   const blob = isVid ? file : (file.type === 'image/jpeg' && file.size < 700 * 1024 ? file : await compressImage(file));
   if (isVid && blob.size > MAX_VIDEO) throw new Error('Video is too large (max 15 MB). Trim it in the editor.');
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -442,11 +472,12 @@ function profileFormHtml(me, submitLabel) {
 function wireProfileForm(f, onDone) {
   let file = null;
   f.photo.addEventListener('change', async () => {
-    const picked = f.photo.files[0]; f.photo.value = ''; if (!picked) return;
+    let picked = f.photo.files[0]; f.photo.value = ''; if (!picked) return;
+    picked = await toJpegIfHeic(picked);
     const edited = await openPhotoEditor(picked, { aspects: ['1:1'], aspect: '1:1', out: 480, round: true })
       .catch(err => { console.error(err); toast('Photo editor not available on this device — using the photo as it is'); return picked; });
     if (!edited) return;
-    file = new File([edited], 'avatar.jpg', { type: 'image/jpeg' });
+    file = edited instanceof File ? edited : new File([edited], 'avatar.jpg', { type: 'image/jpeg' });
     const old = $('#pf-pick .av', f), img = document.createElement('img');
     img.className = 'av'; img.style.cssText = 'width:90px;height:90px'; img.src = URL.createObjectURL(file); old.replaceWith(img);
   });
@@ -751,8 +782,9 @@ function openCreate(kind) {
   f.querySelectorAll('.seg button').forEach(b => b.onclick = () => setKind(b.dataset.k));
   setKind(kind);
   f.file.addEventListener('change', async () => {
-    const picked = f.file.files[0]; f.file.value = ''; if (!picked) return;
+    let picked = f.file.files[0]; f.file.value = ''; if (!picked) return;
     const isVid = picked.type.startsWith('video');
+    if (!isVid) picked = await toJpegIfHeic(picked);
     const edited = isVid
       ? await openVideoEditor(picked, { maxBytes: MAX_VIDEO, maxSeconds: 60 }).catch(err => { console.error(err); toast('Video editor not available on this device — using the video as it is'); return picked; })
       : await openPhotoEditor(picked, kind === 'story' ? { aspects: ['9:16', 'orig', '4:5', '1:1'], aspect: '9:16' } : { aspects: ['4:5', '1:1', 'orig', '16:9'], aspect: '4:5' })
