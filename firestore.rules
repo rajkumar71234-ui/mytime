@@ -95,7 +95,7 @@ service cloud.firestore {
       allow update: if approved()
         && request.auth.uid in resource.data.members
         && isFriend(chatId)
-        && onlyKeys(['lastMessage','lastFrom','updatedAt']);
+        && onlyKeys(['lastMessage','lastFrom','updatedAt','reads']);
 
       match /messages/{mid} {
         allow read: if signedIn()
@@ -163,6 +163,10 @@ service cloud.firestore {
     // ---------- notifications ----------
     match /config/vapidPublic {
       allow get: if signedIn();
+    }
+    match /notifs/{uid}/items/{nid} {
+      allow read, update, delete: if signedIn() && request.auth.uid == uid;
+      allow create: if approved() && request.resource.data.from == request.auth.uid;
     }
     match /pushSubs/{uid}/subs/{sid} {
       allow read, write: if signedIn() && request.auth.uid == uid;

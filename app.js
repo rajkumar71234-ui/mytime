@@ -2,7 +2,7 @@
 //  mytime — private friend-circle social app
 //  Firebase Auth + Firestore (free Spark plan) + Cloudinary (free) for media
 // ============================================================
-import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018i';
+import { firebaseConfig, ADMIN_EMAIL, CLOUDINARY } from './config.js?v=20261018j';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -12,9 +12,9 @@ import {
 import {
   getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where,
   orderBy, limit, limitToLast, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment,
-  writeBatch, runTransaction, Timestamp
+  writeBatch, runTransaction, Timestamp, getCountFromServer
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018i';
+import { openPhotoEditor, openVideoEditor } from './editor.js?v=20261018j';
 
 const NEEDS_SETUP = firebaseConfig.apiKey.startsWith('PASTE');
 const fbApp = initializeApp(firebaseConfig);
@@ -76,7 +76,7 @@ function friendly(e) {
   return map[c] || e?.message || String(e);
 }
 const errH = e => { console.error(e); toast(friendly(e)); };
-const APP_VERSION = '20261018i';
+const APP_VERSION = '20261018j';
 // auto-update: if a newer version is published, refresh the cached files and reload once
 (async () => {
   try {
@@ -105,6 +105,8 @@ const I = {
   back: '<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>',
   more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16zM10 21a2 2 0 0 0 4 0"/></svg>',
+  addUser: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6M19 8v6M16 11h6"/></svg>',
   shield: '<svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>',
   clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   mail: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>',
@@ -602,28 +604,77 @@ function alertUser(title, body, tag) {
     .then(r => r.showNotification(title, { body, icon: 'icon-192.png', badge: 'icon-192.png', tag, renotify: true, vibrate: [200, 100, 200] }))
     .catch(() => {});
 }
+// ---------- unread message counts ----------
+S.unread = new Map();
+function markRead(cid) { updateDoc(doc(db, 'chats', cid), { [`reads.${uid()}`]: serverTimestamp() }).catch(() => {}); }
+function renderUnread() {
+  const total = [...S.unread.values()].reduce((a, b) => a + b, 0);
+  const b = $('#chat-badge'); if (b) { b.hidden = !total; b.textContent = total > 99 ? '99+' : total; }
+  if (S.tab === 'chats') S.tabRefresh?.();
+}
+async function refreshUnread(cid, c) {
+  const me = uid(), read = c.reads?.[me];
+  let n = 0;
+  if (S.openChatId === cid && document.visibilityState === 'visible') markRead(cid);
+  else if (c.lastFrom && c.lastFrom !== me && (!read || tsMs(c.updatedAt) > tsMs(read))) {
+    const q = read ? query(collection(db, 'chats', cid, 'messages'), where('createdAt', '>', read)) : query(collection(db, 'chats', cid, 'messages'), where('from', '==', c.lastFrom));
+    try { n = (await getCountFromServer(q)).data().count; } catch { n = 1; }
+  }
+  S.unread.set(cid, n); renderUnread();
+}
+// ---------- notification feed (bell) ----------
+S.notifs = [];
+function sendNotif(to, type, text, refId = '') {
+  if (!to || to === uid()) return Promise.resolve();
+  return addDoc(collection(db, 'notifs', to, 'items'), { type, text, refId, from: uid(), fromName: S.me.username, fromAvatar: S.me.avatarUrl || '', read: false, createdAt: serverTimestamp() }).catch(e => console.warn('notif', e));
+}
+function notifyFriends(type, text, refId = '') { return Promise.all([...S.friends].map(f => sendNotif(f, type, text, refId))); }
+function renderNotifBadge() {
+  const n = S.notifs.filter(x => !x.read).length, b = $('#notif-badge');
+  if (b) { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; }
+}
+ACT.notifs = () => {
+  const sh = openSheet(`<div class="sh-head"><button class="ib" data-act="close">${I.back}</button><span class="t">Notifications</span></div><div class="sh-body" id="nl"></div>`);
+  const draw = () => {
+    if (!sh.isConnected) return;
+    $('#nl', sh).innerHTML = S.notifs.length ? S.notifs.map(n => `<div class="row nrow ${n.read ? '' : 'unread'}" data-act="notif-open" data-type="${esc(n.type)}" data-ref="${esc(n.refId || '')}" data-uid="${esc(n.from)}">
+        ${avatar({ username: n.fromName, avatarUrl: n.fromAvatar }, 44)}
+        <div class="mid" style="white-space:normal"><span><b>@${esc(n.fromName)}</b> ${esc(n.text)}</span><div>${timeAgo(n.createdAt)}</div></div></div>`).join('')
+      : `<div class="empty"><b>No notifications yet</b>Comments, likes and your friends' new posts will show up here.</div>`;
+  };
+  draw(); S.social.add(draw); sh.cleanup.push(() => S.social.delete(draw));
+  const unread = S.notifs.filter(n => !n.read);
+  if (unread.length) { const b = writeBatch(db); unread.slice(0, 400).forEach(n => b.update(doc(db, 'notifs', uid(), 'items', n.id), { read: true })); b.commit().catch(() => {}); }
+};
+ACT['notif-open'] = el => {
+  const { type, ref, uid: who } = el.dataset;
+  if (ref && ['comment', 'reply', 'heart', 'like', 'post', 'c-heart', 'c-like'].includes(type)) ACT['open-post']({ dataset: { id: ref } });
+  else if (who) openProfile(who);
+};
 function startAlerts(me) {
+  // notification feed for me
+  S.appUnsubs.push(onSnapshot(query(collection(db, 'notifs', me, 'items'), orderBy('createdAt', 'desc'), limit(80)), s => {
+    S.notifs = s.docs.map(dataOf);
+    renderNotifBadge(); S.social.forEach(f => f());
+    s.docChanges().forEach(ch => {
+      if (ch.type !== 'added') return;
+      const n = ch.doc.data({ serverTimestamps: 'estimate' });
+      if (n.read || tsMs(n.createdAt) < NOTIF_START) return;
+      alertUser('@' + n.fromName, n.text, 'n-' + ch.doc.id);
+    });
+  }, e => console.warn('notifs', e)));
   // messages
   S.appUnsubs.push(onSnapshot(query(collection(db, 'chats'), where('members', 'array-contains', me)), s => {
     s.docChanges().forEach(ch => {
-      if (ch.type === 'removed') return;
+      if (ch.type === 'removed') { S.unread.delete(ch.doc.id); renderUnread(); return; }
       const c = ch.doc.data({ serverTimestamps: 'estimate' });
+      refreshUnread(ch.doc.id, c);
       if (!c.lastFrom || c.lastFrom === me || !c.updatedAt || tsMs(c.updatedAt) < NOTIF_START) return;
       if (S.openChatId === ch.doc.id && document.visibilityState === 'visible') return;
       getUser(c.lastFrom).then(u => alertUser('@' + u.username, c.lastMessage || 'New message', 'chat-' + ch.doc.id));
     });
   }, () => {}));
-  // friends' new posts & stories
-  const watchNew = (col, word) => S.appUnsubs.push(onSnapshot(query(collection(db, col), where('createdAt', '>=', Timestamp.fromMillis(NOTIF_START))), s => {
-    s.docChanges().forEach(ch => {
-      if (ch.type !== 'added') return;
-      const p = ch.doc.data({ serverTimestamps: 'estimate' });
-      if (p.deleted || p.uid === me || !S.friends.has(p.uid)) return;
-      alertUser(col === 'posts' ? 'New post' : 'New story', `@${p.username} ${word} ${p.mediaType === 'video' ? 'video' : 'photo'}${p.caption ? ': ' + p.caption.slice(0, 60) : ''}`, col + '-' + p.uid);
-    });
-  }, () => {}));
-  watchNew('posts', 'shared a new');
-  watchNew('stories', 'added a story');
+  // friends' posts, stories and photo changes arrive through the notification feed above
   if (notifOn()) subscribePush().catch(e => console.warn('push', e));
 }
 
@@ -645,14 +696,15 @@ function startApp() {
   render(`<div class="shell">
     <header class="top">${LOGO_SM}<div class="top-r">
       ${isAdmin() ? `<button class="ib" data-act="admin" title="Admin">${I.shield}</button>` : ''}
-      <button class="ib rel" data-act="requests" title="Friend requests">${I.heart}<span class="badge" id="req-badge" hidden></span></button>
+      <button class="ib rel" data-act="notifs" title="Notifications">${I.bell}<span class="badge" id="notif-badge" hidden></span></button>
+      <button class="ib rel" data-act="requests" title="Friend requests">${I.addUser}<span class="badge" id="req-badge" hidden></span></button>
     </div></header>
     <main id="view"></main>
     <nav class="bnav">
       <button class="ib" data-act="tab" data-tab="home">${I.home}</button>
       <button class="ib" data-act="tab" data-tab="search">${I.search}</button>
       <button class="ib" data-act="create">${I.plus}</button>
-      <button class="ib" data-act="tab" data-tab="chats">${I.chat}</button>
+      <button class="ib rel" data-act="tab" data-tab="chats">${I.chat}<span class="badge" id="chat-badge" hidden></span></button>
       <button class="ib" data-act="tab" data-tab="profile">${avatar(S.me, 26)}</button>
     </nav></div>`);
 
@@ -780,6 +832,7 @@ async function react(id, field) {
   try {
     await updateDoc(doc(db, 'posts', id), upd);
     if (!has) logAct(REACT_WORD[field][0], `${REACT_WORD[field][1]} @${p.username}'s post`, { refId: id });
+    if (!has && field !== 'dislikes') sendNotif(p.uid, field === 'likes' ? 'heart' : 'like', field === 'likes' ? '❤️ hearted your post' : '👍 liked your post', id);
   } catch (e) { errH(e); }
 }
 ACT.like = el => react(el.dataset.id, 'likes');
@@ -793,17 +846,18 @@ ACT['c-react'] = async el => {
   try {
     await updateDoc(doc(db, 'posts', pid, 'comments', cid), upd);
     if (!has) logAct(REACT_WORD[f][0], `${REACT_WORD[f][1]} @${c.username}'s comment: ${c.text}`, { refId: pid });
+    if (!has && f !== 'dislikes') sendNotif(c.uid, f === 'likes' ? 'c-heart' : 'c-like', `${f === 'likes' ? '❤️ hearted' : '👍 liked'} your comment: ${String(c.text).slice(0, 60)}`, pid);
   } catch (e) { errH(e); }
 };
 function commentReacts(pid, c) {
   const me = uid();
   const b = (f, icon, cls) => { const n = (c[f] || []).length; return `<button class="cr ${(c[f] || []).includes(me) ? cls : ''}" data-act="c-react" data-pid="${pid}" data-cid="${c.id}" data-f="${f}">${icon}${n ? `<span>${n}</span>` : ''}</button>`; };
-  return `<div class="crs">${b('likes', I.heart, 'on-like')}${b('ups', I.up, 'on-up')}${b('dislikes', I.down, 'on-dis')}<button class="cr cr-txt" data-act="c-reply" data-cid="${c.parentId || c.id}" data-user="${esc(c.username)}">Reply</button></div>`;
+  return `<div class="crs">${b('likes', I.heart, 'on-like')}${b('ups', I.up, 'on-up')}${b('dislikes', I.down, 'on-dis')}<button class="cr cr-txt" data-act="c-reply" data-cid="${c.parentId || c.id}" data-user="${esc(c.username)}" data-ruid="${esc(c.uid)}">Reply</button></div>`;
 }
 // reply to a comment: remembers the thread on the composer form
 ACT['c-reply'] = el => {
   const sh = el.closest('.sheet'), f = sh.querySelector('#c-form');
-  f.dataset.parent = el.dataset.cid; f.dataset.replyTo = el.dataset.user;
+  f.dataset.parent = el.dataset.cid; f.dataset.replyTo = el.dataset.user; f.dataset.replyUid = el.dataset.ruid;
   let chip = sh.querySelector('.replying');
   if (!chip) { chip = document.createElement('div'); chip.className = 'replying'; f.before(chip); }
   chip.innerHTML = `Replying to <b>@${esc(el.dataset.user)}</b> <button class="ib" data-act="c-reply-cancel">${I.close}</button>`;
@@ -867,12 +921,14 @@ function openComments(pid) {
   f.addEventListener('submit', async e => {
     e.preventDefault(); const text = f.t.value.trim(); if (!text) return; f.t.value = '';
     try {
-      const parent = f.dataset.parent, replyTo = f.dataset.replyTo;
-      delete f.dataset.parent; delete f.dataset.replyTo; sh.querySelector('.replying')?.remove();
+      const parent = f.dataset.parent, replyTo = f.dataset.replyTo, replyUid = f.dataset.replyUid;
+      delete f.dataset.parent; delete f.dataset.replyTo; delete f.dataset.replyUid; sh.querySelector('.replying')?.remove();
       await addDoc(collection(db, 'posts', pid, 'comments'), { uid: uid(), username: S.me.username, avatarUrl: S.me.avatarUrl || '', text, deleted: false, createdAt: serverTimestamp(), ...(parent ? { parentId: parent, replyTo } : {}) });
       await updateDoc(doc(db, 'posts', pid), { commentCount: increment(1) });
       const p = S.postIndex.get(pid);
       logAct('comment', parent ? `Replied to @${replyTo} on @${p?.username || 'post'}'s post: ${text}` : `Commented on @${p?.username || 'post'}: ${text}`, { refId: pid });
+      if (parent && replyUid) sendNotif(replyUid, 'reply', `replied to your comment: ${text.slice(0, 80)}`, pid);
+      if (p && p.uid !== replyUid) sendNotif(p.uid, 'comment', `commented on your post: ${text.slice(0, 80)}`, pid);
     } catch (ex) { errH(ex); }
   });
 }
@@ -928,9 +984,11 @@ function openCreate(kind) {
     if (kind === 'post') {
       const ref = await addDoc(collection(db, 'posts'), { ...base, caption: f.cap.value.trim(), likes: [], dislikes: [], commentCount: 0 });
       logAct('post', `Posted a ${up.type}${f.cap.value ? ': ' + f.cap.value.trim() : ''}`, { refId: ref.id, mediaUrl: up.url });
+      notifyFriends('post', `shared a new ${up.type}${f.cap.value.trim() ? ': ' + f.cap.value.trim().slice(0, 60) : ''}`, ref.id);
     } else {
       const ref = await addDoc(collection(db, 'stories'), { ...base, viewers: [], expiresAt: Timestamp.fromMillis(Date.now() + DAY_MS) });
       logAct('story', `Added a ${up.type} story`, { refId: ref.id, mediaUrl: up.url });
+      notifyFriends('story', 'added a new story', ref.id);
     }
     closeSheet(sh); toast(kind === 'post' ? 'Posted!' : 'Story added — visible for 24 hours');
     if (S.tab !== 'home') go('home');
@@ -1052,6 +1110,7 @@ async function acceptReq(from) {
   b.set(doc(db, 'friendships', members.join('_')), { members, requestId: rid, createdAt: serverTimestamp() });
   await b.commit();
   const u = await getUser(from); logAct('friend-accept', `Became friends with @${u.username}`, { refId: from });
+  sendNotif(from, 'accept', 'accepted your friend request');
   toast(`You and @${u.username} are now friends`);
 }
 ACT.accept = el => { el.disabled = true; acceptReq(el.dataset.uid).catch(errH); };
@@ -1150,6 +1209,7 @@ ACT['edit-profile'] = () => {
     <div class="sh-body"><form class="form" id="ep" style="padding:16px">${profileFormHtml(S.me, 'Save')}</form></div>`);
   wireProfileForm($('#ep', sh), async upd => {
     await updateDoc(doc(db, 'users', uid()), upd);
+    if (upd.avatarUrl) notifyFriends('dp', 'changed their profile photo');
     logAct('profile', 'Updated profile'); closeSheet(sh); toast('Profile updated');
     if (S.tab === 'profile') S.tabRefresh?.();
   });
@@ -1229,8 +1289,8 @@ function tabChats() {
     const us = await Promise.all(ids.map(id => getUser(id)));
     const box = $('#cl'); if (!box) return;
     const rows = us.map(u => ({ u, c: chats[u.id] })).sort((a, b) => tsMs(b.c?.updatedAt || 0) - tsMs(a.c?.updatedAt || 0));
-    box.innerHTML = rows.length ? rows.map(({ u, c }) => `<div class="row" data-act="message" data-uid="${u.id}">${avatar(u, 52)}
-        <div class="mid"><b>${esc(u.username)}</b><div>${c?.lastMessage ? (c.lastFrom === uid() ? 'You: ' : '') + esc(c.lastMessage) + ' · ' + timeAgo(c.updatedAt) : 'Tap to chat'}</div></div></div>`).join('')
+    box.innerHTML = rows.length ? rows.map(({ u, c }) => { const n = S.unread.get(pairId(uid(), u.id)) || 0; return `<div class="row ${n ? 'has-unread' : ''}" data-act="message" data-uid="${u.id}">${avatar(u, 52)}
+        <div class="mid"><b>${esc(u.username)}</b><div>${c?.lastMessage ? (c.lastFrom === uid() ? 'You: ' : '') + esc(c.lastMessage) + ' · ' + timeAgo(c.updatedAt) : 'Tap to chat'}</div></div>${n ? `<span class="ubadge">${n > 99 ? '99+' : n}</span>` : ''}</div>`; }).join('')
       : `<div class="empty"><b>No chats yet</b>You can message people once you're friends.</div>`;
   };
   S.tabRefresh = draw;
@@ -1251,7 +1311,9 @@ async function openChat(other) {
   try { await setDoc(doc(db, 'chats', cid), { members: [me, other].sort() }, { merge: true }); }
   catch (e) { errH(e); return closeSheet(sh); }
   const body = $('.sh-body', sh);
+  markRead(cid); S.unread.set(cid, 0); renderUnread();
   sh.unsubs.push(onSnapshot(query(collection(db, 'chats', cid, 'messages'), orderBy('createdAt'), limitToLast(300)), s => {
+    if (document.visibilityState === 'visible' && s.docChanges().some(ch => ch.type === 'added' && ch.doc.data().from !== me)) markRead(cid);
     const ms = s.docs.map(dataOf).filter(m => !m.deleted);
     let lastDay = '';
     $('#ms', sh).innerHTML = ms.length ? ms.map(m => {
@@ -1267,7 +1329,7 @@ async function openChat(other) {
     e.preventDefault(); const text = f.t.value.trim(); if (!text) return; f.t.value = '';
     try {
       await addDoc(collection(db, 'chats', cid, 'messages'), { from: me, to: other, text, deleted: false, createdAt: serverTimestamp() });
-      await updateDoc(doc(db, 'chats', cid), { lastMessage: text.slice(0, 80), lastFrom: me, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, 'chats', cid), { lastMessage: text.slice(0, 80), lastFrom: me, updatedAt: serverTimestamp(), [`reads.${me}`]: serverTimestamp() });
       logAct('message', `Sent a message to @${u.username}`, { refId: cid });
     } catch (ex) { errH(ex); }
   });

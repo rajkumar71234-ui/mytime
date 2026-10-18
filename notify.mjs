@@ -46,19 +46,11 @@ for (const c of (await db.collection('chats').where('updatedAt', '>', since).get
   }
 }
 
-// 3) friends' new posts and stories
-const newPosts = (await between(db.collection('posts')).get()).docs.map(d => ({ ...d.data(), col: 'posts' }));
-const newStories = (await between(db.collection('stories')).get()).docs.map(d => ({ ...d.data(), col: 'stories' }));
-const items = [...newPosts, ...newStories].filter(p => !p.deleted);
-if (items.length) {
-  const friendships = (await db.collection('friendships').get()).docs.map(d => d.data().members || []);
-  for (const p of items) for (const m of friendships) {
-    if (!m.includes(p.uid)) continue;
-    const other = m.find(x => x !== p.uid);
-    const what = p.mediaType === 'video' ? 'video' : 'photo';
-    add(other, p.col === 'posts'
-      ? { title: 'New post', body: `${name(p.uid)} shared a new ${what}${p.caption ? ': ' + String(p.caption).slice(0, 80) : ''}`, tag: 'posts-' + p.uid }
-      : { title: 'New story', body: `${name(p.uid)} added a story`, tag: 'stories-' + p.uid });
+// 3) activity notifications (comments, replies, likes, friends' posts/stories, photo changes, accepted requests)
+for (const [id] of users) {
+  for (const d of (await between(db.collection('notifs').doc(id).collection('items')).get()).docs) {
+    const x = d.data();
+    add(id, { title: '@' + (x.fromName || users.get(x.from)?.username || 'someone'), body: x.text || 'New activity', tag: 'n-' + d.id });
   }
 }
 

@@ -266,3 +266,9 @@ svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .cr-txt{font-weight:600}
 .replying{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;font-size:13px;color:var(--muted);background:var(--soft);border-top:1px solid var(--line)}
 .replying .ib svg{width:16px;height:16px}
+.ubadge{background:var(--accent);color:#fff;font-size:12px;font-weight:700;border-radius:12px;min-width:22px;height:22px;display:grid;place-items:center;padding:0 7px;flex:none}
+.row.has-unread .mid b{font-weight:800}
+.row.has-unread .mid div{color:var(--fg);font-weight:600}
+.nrow{align-items:flex-start}
+.nrow.unread{background:#eef6ff}
+.nrow .mid span{font-size:14px;line-height:1.35}
